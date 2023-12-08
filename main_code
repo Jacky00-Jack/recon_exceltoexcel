@@ -1,0 +1,56 @@
+import pandas as pd
+import numpy as np
+from openpyxl import load_workbook
+
+file_loc_tlm = r"\\whexpfseur03\NostroAC\RCOE-RSG-Manchester\CIBCM Fund Accounting\Reconciliations\2023\Invesco Canada (Darwin)\TA Python\December\08.12\TLM TA.xlsx"
+file_loc_compile = r"\\whexpfseur03\NostroAC\RCOE-RSG-Manchester\CIBCM Fund Accounting\Reconciliations\2023\Invesco Canada (Darwin)\TA Python\December\08.12\Summary Sheet-Mellon-report Dec07.xlsx"
+main = pd.read_excel(file_loc_tlm)
+main['Amount'] = np.where(main['Item Type'].str.contains('L CR'),-1*main['Amount'], np.where(main['Item Type'].str.contains('S DR'),-1*main['Amount'],main['Amount']))
+main = main[['Account', 'Amount', 'Item ID', 'Item Type', 'CCY']].dropna()
+refer_cad = pd.read_excel(file_loc_compile, sheet_name = 'CAD Dec 07', skiprows = 7)
+refer_usd = pd.read_excel(file_loc_compile, sheet_name = 'USD Dec 07', skiprows = 7)
+def process_cad(refer_cad):
+    function_cad = refer_cad['Adj Switches Excluded '] + refer_cad['N$M Lapping Blotter (Advanced)'] + refer_cad['Lapping Blotter Adj (Advanced)'] + refer_cad['Additional Lapping Blotter (Advanced)'] + refer_cad['PTF Series Lapping Blotter (Advanced)']
+    return function_cad
+def process_usd(refer_usd):
+    function_usd = refer_usd['Adj Switches Excluded '] + refer_usd['N$M Lapping USD (Advanced)'] + refer_usd['Lapping Blotter Adj USD (Advanced)'] + refer_usd['PTF Series Lapping USD (Advanced)']
+    return function_usd
+def amount(final):
+    conditions = final['Functional Total'] - final['Amount']
+    return abs(conditions)
+def condition(final):
+    conditions = final['Functional Total'] - final['Amount']
+    if(abs(conditions) <= 0.001):
+        return 'Match'
+    else:
+        return 'No Match'
+
+refer_cad['Functional Total'] = refer_cad.apply(process_cad, axis = 1)
+refer_cad = refer_cad[['Fund Number Group', 'Fund Name', 'Functional Total']].dropna()
+refer_cad = refer_cad[refer_cad['Functional Total'] != 0]
+refer_cad['Fund Number Group'] = refer_cad['Fund Number Group'].astype("string")
+
+main_cad = main[main['CCY'] == 'CAD']
+r_cad = '({})'.format('|'.join(refer_cad['Fund Number Group']))
+merge_df = main_cad['Account'].str.extract(r_cad, expand = False).fillna(main_cad['Account'])
+final = refer_cad.merge(main_cad.drop('Account', axis = 1), left_on = 'Fund Number Group', right_on = merge_df, how = 'outer')
+final['Difference'] = final.apply(amount, axis = 1)
+final['Match Result'] = final.apply(condition, axis = 1)
+final.to_excel(r"\\whexpfseur03\NostroAC\RCOE-RSG-Manchester\CIBCM Fund Accounting\Reconciliations\2023\Invesco Canada (Darwin)\TA Python\December\08.12\Output.xlsx", sheet_name = 'Output_CAD', index = False)
+
+refer_usd['Functional Total'] = refer_usd.apply(process_usd, axis = 1)
+refer_usd = refer_usd[['Fund Number Group', 'Fund Name', 'Functional Total']].dropna()
+refer_usd = refer_usd[refer_usd['Functional Total'] != 0]
+refer_usd['Fund Number Group'] = refer_usd['Fund Number Group'].map(lambda x: x.lstrip('US'))
+
+main_usd = main[main['CCY'] == 'USD']
+r_usd = '({})'.format('|'.join(refer_usd['Fund Number Group']))
+merge_df = main_usd['Account'].str.extract(r_usd, expand = False).fillna(main_usd['Account'])
+final = refer_usd.merge(main_usd.drop('Account', axis = 1), left_on = 'Fund Number Group', right_on = merge_df, how = 'outer')
+final['Difference'] = final.apply(amount, axis = 1)
+final['Match Result'] = final.apply(condition, axis = 1)
+
+path = r"\\whexpfseur03\NostroAC\RCOE-RSG-Manchester\CIBCM Fund Accounting\Reconciliations\2023\Invesco Canada (Darwin)\TA Python\December\08.12\Output.xlsx"
+output = load_workbook(path)
+with pd.ExcelWriter(path, engine = 'openpyxl', mode = 'a') as writer:  
+    final.to_excel(writer, sheet_name='Output_USD', index = False)
